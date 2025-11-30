@@ -6,6 +6,7 @@ import numpy as np
 import sys
 import os
 import io
+from datetime import datetime, timedelta
 
 # Esta debe ser la primera llamada a Streamlit
 st.set_page_config(
@@ -86,7 +87,53 @@ def create_risk_indicator(probability):
     
     plt.tight_layout()
     return fig
-
+def generar_alertas(analysis_df):
+    """Genera alertas en tiempo real basadas en los datos"""
+    alertas = []
+    
+    # 1. Alerta por tasa de churn alta
+    churn_rate = analysis_df['churn'].mean()
+    if churn_rate > 0.15:
+        alertas.append((f"Tasa de churn CRITICA: {churn_rate:.1%} (>15%)", "error", churn_rate))
+    elif churn_rate > 0.10:
+        alertas.append((f"Tasa de churn ALTA: {churn_rate:.1%} (>10%)", "warning", churn_rate))
+    
+    # 2. Alerta por clientes valiosos inactivos
+    clientes_valiosos_inactivos = analysis_df[
+        (analysis_df['days_since_last_activity'] > 30) & 
+        (analysis_df['total_spent'] > analysis_df['total_spent'].quantile(0.7))
+    ]
+    if len(clientes_valiosos_inactivos) > 10:
+        alertas.append((f"{len(clientes_valiosos_inactivos)} clientes valiosos inactivos >30 días", "error", len(clientes_valiosos_inactivos)))
+    elif len(clientes_valiosos_inactivos) > 5:
+        alertas.append((f"{len(clientes_valiosos_inactivos)} clientes valiosos inactivos >30 días", "warning", len(clientes_valiosos_inactivos)))
+    
+    # 3. Alerta por baja conversion
+    avg_conversion = analysis_df['purchase_conversion_rate'].mean()
+    if avg_conversion < 0.1:
+        alertas.append((f"Conversion BAJA: {avg_conversion:.1%} (<10%)", "warning", avg_conversion))
+    
+    # 4. Alerta por concentración de riesgo
+    top_10_clientes = analysis_df.nlargest(10, 'total_spent')
+    concentracion_riesgo = top_10_clientes['churn'].sum()
+    if concentracion_riesgo >= 3:
+        alertas.append((f"ALTO RIESGO: {concentracion_riesgo} de top 10 clientes podrían abandonar", "error", concentracion_riesgo))
+    
+    # 5. Alerta por sesiones bajas
+    avg_sessions = analysis_df['total_sessions'].mean()
+    if avg_sessions < 5:
+        alertas.append((f"Engagement BAJO: {avg_sessions:.1f} sesiones promedio por cliente", "warning", avg_sessions))
+    
+    # 6. Alerta por carritos abandonados
+    avg_cart_abandonment = analysis_df['cart_addition_rate'].mean()
+    if avg_cart_abandonment > 0.8:
+        alertas.append((f"Alta tasa carritos abandonados: {avg_cart_abandonment:.1%}", "warning", avg_cart_abandonment))
+    
+    # 7. Alerta positiva por buen desempeño
+    if churn_rate < 0.05:
+        alertas.append((f"EXCELENTE: Tasa de churn baja {churn_rate:.1%}", "info", churn_rate))
+    
+    return alertas
 def show_data_upload():
     st.header("Cargar Datos del Cliente")
     
@@ -209,6 +256,219 @@ def process_uploaded_data():
         st.success("Procesamiento completado. Los datos estan listos para analisis.")
     except Exception as e:
         st.error(f"Error en el procesamiento: {e}")
+
+def show_add_customer():
+    st.header("Agregar Cliente Manualmente")
+    
+    with st.form("nuevo_cliente"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            customer_id = st.text_input("ID del Cliente*")
+            edad = st.number_input("Edad", min_value=18, max_value=100, value=30)
+            pais = st.text_input("País", value="Colombia")
+            
+        with col2:
+            signup_date = st.date_input("Fecha de Registro")
+            ciudad = st.text_input("Ciudad", value="Bogota")
+            segmento = st.selectbox("Segmento", ["Nuevo", "Recurrente", "VIP"])
+        
+        # Datos de comportamiento inicial
+        st.subheader("Datos de Comportamiento Inicial")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            total_sessions = st.number_input("Sesiones Totales", min_value=0, value=5)
+            total_purchases = st.number_input("Compras Totales", min_value=0, value=2)
+        with col2:
+            total_spent = st.number_input("Gasto Total ($)", min_value=0.0, value=500.0)
+            days_inactive = st.number_input("Días Inactivo", min_value=0, value=7)
+        with col3:
+            cart_additions = st.number_input("Carritos Agregados", min_value=0, value=3)
+            conversion_rate = st.slider("Tasa Conversión (%)", 0.0, 100.0, 40.0) / 100.0
+        
+        submitted = st.form_submit_button("Agregar Cliente")
+        
+        if submitted:
+            if customer_id:
+                # Validar que el ID no exista
+                try:
+                    existing_customers = pd.read_csv('data/synthetic/customers.csv')
+                    if customer_id in existing_customers['customer_id'].values:
+                        st.error("El ID del cliente ya existe. Usa un ID diferente.")
+                        return
+                except:
+                    pass  # Si no existe el archivo, continuar
+                
+                agregar_cliente_manual(
+                    customer_id, signup_date, edad, pais, ciudad, segmento,
+                    total_sessions, total_purchases, total_spent, days_inactive,
+                    cart_additions, conversion_rate
+                )
+                st.success("Cliente agregado exitosamente")
+                
+                # Opción para procesar datos
+                if st.button("Procesar Datos con Nuevo Cliente"):
+                    process_uploaded_data()
+                    st.rerun()
+            else:
+                st.error("El ID del cliente es obligatorio")
+
+def agregar_cliente_manual(customer_id, signup_date, edad, pais, ciudad, segmento,
+                          total_sessions, total_purchases, total_spent, days_inactive,
+                          cart_additions, conversion_rate):
+    """Agrega un nuevo cliente a la base de datos"""
+    try:
+        # Cargar datos existentes o crear nuevo DataFrame
+        try:
+            customers_df = pd.read_csv('data/synthetic/customers.csv')
+        except FileNotFoundError:
+            customers_df = pd.DataFrame(columns=['customer_id', 'signup_date', 'edad', 'pais', 'ciudad', 'segmento'])
+        
+        # Crear nuevo registro
+        nuevo_cliente = pd.DataFrame([{
+            'customer_id': customer_id,
+            'signup_date': signup_date.strftime('%Y-%m-%d'),
+            'edad': edad,
+            'pais': pais,
+            'ciudad': ciudad,
+            'segmento': segmento
+        }])
+        
+        # Agregar a la base existente
+        customers_df = pd.concat([customers_df, nuevo_cliente], ignore_index=True)
+        
+        # Guardar
+        customers_df.to_csv('data/synthetic/customers.csv', index=False)
+        
+        # Generar datos sintéticos de transacciones y eventos
+        generar_datos_conductuales(
+            customer_id, total_sessions, total_purchases, total_spent,
+            days_inactive, cart_additions, conversion_rate, signup_date
+        )
+        
+        # Generar features para el nuevo cliente
+        generar_features_cliente(
+            customer_id, total_sessions, total_purchases, total_spent,
+            days_inactive, cart_additions, conversion_rate
+        )
+        
+    except Exception as e:
+        st.error(f"Error agregando cliente: {e}")
+
+def generar_datos_conductuales(customer_id, sessions, purchases, spent, inactive, carts, conversion, signup_date):
+    """Genera datos de comportamiento sintéticos para el nuevo cliente"""
+    try:
+        # Generar transacciones
+        try:
+            transactions_df = pd.read_csv('data/synthetic/transactions.csv')
+        except FileNotFoundError:
+            transactions_df = pd.DataFrame(columns=['customer_id', 'timestamp', 'monto', 'producto', 'categoria'])
+        
+        if purchases > 0:
+            avg_purchase = spent / purchases
+            for i in range(purchases):
+                days_ago = inactive + np.random.randint(1, 30)
+                purchase_date = signup_date + timedelta(days=np.random.randint(1, 365))
+                
+                nueva_transaccion = pd.DataFrame([{
+                    'customer_id': customer_id,
+                    'timestamp': purchase_date.strftime('%Y-%m-%d'),
+                    'monto': avg_purchase * np.random.uniform(0.8, 1.2),
+                    'producto': f'Producto_{np.random.randint(1, 10)}',
+                    'categoria': np.random.choice(['Ropa', 'Electronica', 'Hogar', 'Deportes'])
+                }])
+                transactions_df = pd.concat([transactions_df, nueva_transaccion], ignore_index=True)
+            
+            transactions_df.to_csv('data/synthetic/transactions.csv', index=False)
+        
+        # Generar eventos
+        try:
+            events_df = pd.read_csv('data/synthetic/events.csv')
+        except FileNotFoundError:
+            events_df = pd.DataFrame(columns=['customer_id', 'timestamp', 'tipo_evento', 'pagina'])
+        
+        event_types = ['pagina_vista', 'carrito_agregado', 'producto_visto', 'busqueda']
+        pages = ['/inicio', '/productos', '/categoria', '/carrito', '/checkout']
+        
+        for i in range(sessions * 3):  # 3 eventos por sesión en promedio
+            days_ago = np.random.randint(0, inactive + 7)
+            event_date = datetime.now() - timedelta(days=days_ago)
+            
+            nuevo_evento = pd.DataFrame([{
+                'customer_id': customer_id,
+                'timestamp': event_date.strftime('%Y-%m-%d %H:%M:%S'),
+                'tipo_evento': np.random.choice(event_types, p=[0.5, 0.2, 0.2, 0.1]),
+                'pagina': np.random.choice(pages)
+            }])
+            events_df = pd.concat([events_df, nuevo_evento], ignore_index=True)
+        
+        events_df.to_csv('data/synthetic/events.csv', index=False)
+        
+    except Exception as e:
+        st.error(f"Error generando datos conductuales: {e}")
+
+def generar_features_cliente(customer_id, sessions, purchases, spent, inactive, carts, conversion):
+    """Genera features para el nuevo cliente"""
+    try:
+        # Cargar features existentes
+        try:
+            features_df = pd.read_csv('data/processed/features.csv')
+        except FileNotFoundError:
+            # Crear estructura inicial si no existe
+            features_df = pd.DataFrame(columns=[
+                'customer_id', 'total_sessions', 'total_events', 'avg_session_duration',
+                'pages_per_session', 'cart_additions', 'product_views', 'searches',
+                'total_purchases', 'total_spent', 'avg_purchase_value', 'avg_items_per_purchase',
+                'days_since_signup', 'days_since_last_activity', 'purchase_frequency',
+                'cart_addition_rate', 'purchase_conversion_rate', 'avg_days_between_purchases'
+            ])
+        
+        # Calcular días desde registro (aproximado)
+        days_since_signup = np.random.randint(30, 365)
+        
+        # Crear nuevos features
+        nuevos_features = pd.DataFrame([{
+            'customer_id': customer_id,
+            'total_sessions': sessions,
+            'total_events': sessions * 3,
+            'avg_session_duration': np.random.uniform(120, 600),
+            'pages_per_session': np.random.uniform(5, 15),
+            'cart_additions': carts,
+            'product_views': sessions * 2,
+            'searches': sessions * 0.5,
+            'total_purchases': purchases,
+            'total_spent': spent,
+            'avg_purchase_value': spent / purchases if purchases > 0 else 0,
+            'avg_items_per_purchase': np.random.uniform(1, 3),
+            'days_since_signup': days_since_signup,
+            'days_since_last_activity': inactive,
+            'purchase_frequency': purchases / days_since_signup if days_since_signup > 0 else 0,
+            'cart_addition_rate': carts / sessions if sessions > 0 else 0,
+            'purchase_conversion_rate': conversion,
+            'avg_days_between_purchases': days_since_signup / purchases if purchases > 0 else 0
+        }])
+        
+        # Agregar a features existentes
+        features_df = pd.concat([features_df, nuevos_features], ignore_index=True)
+        features_df.to_csv('data/processed/features.csv', index=False)
+        
+        # Generar etiqueta de churn (basada en inactividad)
+        try:
+            churn_labels = pd.read_csv('data/synthetic/churn_labels.csv')
+        except FileNotFoundError:
+            churn_labels = pd.DataFrame(columns=['customer_id', 'churn'])
+        
+        churn_prob = 0.1 if inactive < 15 else 0.5 if inactive < 30 else 0.8
+        nueva_etiqueta = pd.DataFrame([{
+            'customer_id': customer_id,
+            'churn': 1 if np.random.random() < churn_prob else 0
+        }])
+        
+        churn_labels = pd.concat([churn_labels, nueva_etiqueta], ignore_index=True)
+        churn_labels.to_csv('data/synthetic/churn_labels.csv', index=False)
+        
+    except Exception as e:
+        st.error(f"Error generando features: {e}")
 
 def show_data_export():
     st.header("Exportar Datos y Resultados")
@@ -358,7 +618,17 @@ def export_full_report():
         st.error(f"Error generando reporte: {e}")
 
 def show_executive_dashboard(analysis_df):
-    st.header("Panel de Control Ejecutivo")
+    # SISTEMA DE ALERTAS EN TIEMPO REAL
+    alertas = generar_alertas(analysis_df)
+    if alertas:
+        st.sidebar.markdown("### Alertas Activas")
+        for i, (alerta, tipo, datos) in enumerate(alertas):
+            if tipo == "error":
+                st.sidebar.error(f"{i+1}. {alerta}")
+            elif tipo == "warning":
+                st.sidebar.warning(f"{i+1}. {alerta}")
+            else:
+                st.sidebar.info(f"{i+1}. {alerta}")
     
     # KPI principales
     col1, col2, col3, col4 = st.columns(4)
@@ -425,7 +695,6 @@ def show_executive_dashboard(analysis_df):
     
     plt.tight_layout()
     st.pyplot(fig)
-
 def show_dashboard(analysis_df):
     col1, col2, col3, col4 = st.columns(4)
     
@@ -802,31 +1071,288 @@ def show_segmentation(analysis_df):
             col1.metric("Clientes", len(segment_data))
             col2.metric("Valor Promedio", f"${segment_data['total_spent'].mean():.0f}")
             col3.metric("Tasa Churn", f"{segment_data['churn'].mean():.1%}")
+def show_sistema_alertas(analysis_df):
+    st.header("Sistema de Alertas - Panel Detallado")
+    
+    alertas = generar_alertas(analysis_df)
+    
+    if not alertas:
+        st.success("No hay alertas activas - Todo esta bajo control")
+        return
+    
+    # Encontrar la alerta de clientes inactivos
+    alerta_inactivos = None
+    for alerta in alertas:
+        if "inactivos" in alerta[0].lower():
+            alerta_inactivos = alerta
+            break
+    
+    if alerta_inactivos:
+        st.warning(f"Se han detectado {len(alertas)} alertas que requieren atencion")
+        
+        # Mostrar alerta principal expandida
+        with st.expander(f"Alerta #1: {alerta_inactivos[0].split(':')[0]}", expanded=True):
+            st.write(f"**Descripcion:** {alerta_inactivos[0]}")
+            
+            # Obtener clientes inactivos valiosos
+            clientes_inactivos = analysis_df[
+                (analysis_df['days_since_last_activity'] > 30) & 
+                (analysis_df['total_spent'] > analysis_df['total_spent'].quantile(0.7))
+            ]
+            
+            st.markdown("---")
+            st.subheader("Lista Detallada de Clientes en Riesgo")
+            
+            # Crear tabla de clientes
+            clientes_display = clientes_inactivos[['customer_id', 'total_spent', 'days_since_last_activity', 'total_purchases']].copy()
+            clientes_display = clientes_display.rename(columns={
+                'customer_id': 'Cliente ID',
+                'total_spent': 'Valor Mensual',
+                'days_since_last_activity': 'Dias Inactivo',
+                'total_purchases': 'Compras Totales'
+            })
+            clientes_display['Valor Mensual'] = clientes_display['Valor Mensual'].apply(lambda x: f"${x:,.0f}")
+            clientes_display['Nivel Riesgo'] = clientes_display['Dias Inactivo'].apply(
+                lambda x: 'Alto' if x > 45 else 'Medio'
+            )
+            
+            st.dataframe(clientes_display, use_container_width=True)
+            
+            st.markdown("---")
+            st.subheader("Acciones Recomendadas")
+            st.write("- Campaña de reactivacion con ofertas personalizadas")
+            st.write("- Contacto proactivo del equipo de ventas")
+            st.write("- Segmentacion para estrategias especificas")
+    
+    # Mostrar otras alertas
+    otras_alertas = [a for a in alertas if a != alerta_inactivos]
+    if otras_alertas:
+        st.markdown("---")
+        st.subheader("Otras Alertas Activas")
+        for i, (alerta, tipo, valor) in enumerate(otras_alertas, 2):
+            with st.expander(f"Alerta #{i}: {alerta.split(':')[0]}"):
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.write(f"**Descripcion:** {alerta}")
+                with col2:
+                    if tipo == "error":
+                        st.error("CRITICA")
+                    elif tipo == "warning":
+                        st.warning("ALTA")
+                    else:
+                        st.info("INFORMATIVA")
+    
+    # Resumen de alertas
+    st.markdown("---")
+    st.subheader("Resumen de Alertas")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    criticas = len([a for a in alertas if a[1] == "error"])
+    advertencias = len([a for a in alertas if a[1] == "warning"])
+    informativas = len([a for a in alertas if a[1] == "info"])
+    
+    col1.metric("Alertas Criticas", criticas)
+    col2.metric("Alertas de Advertencia", advertencias)
+    col3.metric("Alertas Informativas", informativas)
 
+    # Filtros y acciones masivas mejorados - ESTO DEBE ESTAR DENTRO DE LA FUNCIÓN
+    if alerta_inactivos and 'clientes_inactivos' in locals() and len(clientes_inactivos) > 0:
+        st.markdown("---")
+        st.subheader("Gestion de Clientes en Riesgo")
+        
+        # Filtros avanzados
+        st.markdown("#### Filtros Avanzados")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            min_valor = st.number_input("Valor minimo ($)", 
+                                       min_value=0, 
+                                       value=0,
+                                       step=100)
+            
+        with col2:
+            min_dias_inactivo = st.slider("Dias inactivos minimos", 
+                                         min_value=30, 
+                                         max_value=90, 
+                                         value=30)
+            
+        with col3:
+            segmento_filtro = st.selectbox("Segmento por valor",
+                                          ["Todos", "Alto valor", "Medio valor", "Bajo valor"])
+        
+        # Aplicar filtros
+        clientes_filtrados = clientes_inactivos.copy()
+        
+        # Filtro por valor mínimo
+        if min_valor > 0:
+            clientes_filtrados = clientes_filtrados[clientes_filtrados['total_spent'] >= min_valor]
+        
+        # Filtro por días inactivos
+        clientes_filtrados = clientes_filtrados[clientes_filtrados['days_since_last_activity'] >= min_dias_inactivo]
+        
+        # Filtro por segmento de valor
+        if segmento_filtro == "Alto valor":
+            percentil_80 = clientes_filtrados['total_spent'].quantile(0.8)
+            clientes_filtrados = clientes_filtrados[clientes_filtrados['total_spent'] > percentil_80]
+        elif segmento_filtro == "Medio valor":
+            percentil_40 = clientes_filtrados['total_spent'].quantile(0.4)
+            percentil_80 = clientes_filtrados['total_spent'].quantile(0.8)
+            clientes_filtrados = clientes_filtrados[
+                (clientes_filtrados['total_spent'] >= percentil_40) &
+                (clientes_filtrados['total_spent'] <= percentil_80)
+            ]
+        elif segmento_filtro == "Bajo valor":
+            percentil_40 = clientes_filtrados['total_spent'].quantile(0.4)
+            clientes_filtrados = clientes_filtrados[clientes_filtrados['total_spent'] < percentil_40]
+        
+        # Mostrar resultados del filtrado
+        st.info(f"Clientes filtrados: {len(clientes_filtrados)} de {len(clientes_inactivos)}")
+        
+        # Mostrar tabla filtrada
+        if len(clientes_filtrados) > 0:
+            st.subheader("Clientes Filtrados")
+            
+            # Crear tabla de clientes filtrados
+            clientes_filtrados_display = clientes_filtrados[['customer_id', 'total_spent', 'days_since_last_activity', 'total_purchases']].copy()
+            clientes_filtrados_display = clientes_filtrados_display.rename(columns={
+                'customer_id': 'Cliente ID',
+                'total_spent': 'Valor Mensual',
+                'days_since_last_activity': 'Dias Inactivo',
+                'total_purchases': 'Compras Totales'
+            })
+            clientes_filtrados_display['Valor Mensual'] = clientes_filtrados_display['Valor Mensual'].apply(lambda x: f"${x:,.0f}")
+            clientes_filtrados_display['Nivel Riesgo'] = clientes_filtrados_display['Dias Inactivo'].apply(
+                lambda x: 'Alto' if x > 45 else 'Medio'
+            )
+            
+            st.dataframe(clientes_filtrados_display, use_container_width=True)
+            
+            # Acciones masivas sobre clientes filtrados
+            st.subheader("Acciones Masivas")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("Email Marketing", key="email_masivo"):
+                    st.success(f"Preparando campana de email para {len(clientes_filtrados)} clientes filtrados")
+                    
+            with col2:
+                if st.button("Asignar a Equipo", key="asignar_masivo"):
+                    st.success(f"{len(clientes_filtrados)} clientes asignados al equipo de ventas")
+                    
+            with col3:
+                # Exportar lista filtrada
+                csv = clientes_filtrados.to_csv(index=False)
+                st.download_button(
+                    label="Exportar Lista Filtrada",
+                    data=csv,
+                    file_name="clientes_riesgo_filtrados.csv",
+                    mime="text/csv",
+                    key="exportar_filtrado"
+                )
+        else:
+            st.warning("No hay clientes que coincidan con los filtros aplicados")
+        
+        # Análisis del grupo filtrado
+        st.markdown("---")
+        st.subheader("Analisis del Grupo Filtrado")
+        
+        if len(clientes_filtrados) > 0:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Caracteristicas del grupo filtrado:**")
+                st.write(f"- Total clientes: {len(clientes_filtrados)}")
+                st.write(f"- Gasto promedio: ${clientes_filtrados['total_spent'].mean():,.0f}")
+                st.write(f"- Dias inactivos promedio: {clientes_filtrados['days_since_last_activity'].mean():.1f}")
+                st.write(f"- Compras promedio: {clientes_filtrados['total_purchases'].mean():.1f}")
+                
+                # Calcular percentiles de valor
+                percentil_25 = clientes_filtrados['total_spent'].quantile(0.25)
+                percentil_75 = clientes_filtrados['total_spent'].quantile(0.75)
+                st.write(f"- Rango de valor: ${percentil_25:,.0f} - ${percentil_75:,.0f}")
+                
+            with col2:
+                st.write("**Recomendaciones especificas:**")
+                if segmento_filtro == "Alto valor":
+                    st.write("- Contacto directo ejecutivo")
+                    st.write("- Ofertas exclusivas y personalizadas")
+                    st.write("- Revision de cuenta prioritaria")
+                elif segmento_filtro == "Medio valor":
+                    st.write("- Email secuencial de reactivacion")
+                    st.write("- Ofertas segmentadas por comportamiento")
+                    st.write("- Follow-up a los 7 dias")
+                elif segmento_filtro == "Bajo valor":
+                    st.write("- Campanas automatizadas de email")
+                    st.write("- Ofertas de reactivacion estandar")
+                    st.write("- Enfoque en volumen vs personalizacion")
+                else:
+                    st.write("- Segmentar por valor para estrategias diferenciadas")
+                    st.write("- Priorizar clientes de alto valor")
+                    st.write("- Campanas escalonadas por nivel de riesgo")
+            
+            # Metricas rapidas del grupo filtrado
+            st.subheader("Metricas del Grupo Filtrado")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            valor_total = clientes_filtrados['total_spent'].sum()
+            valor_promedio = clientes_filtrados['total_spent'].mean()
+            inactividad_promedio = clientes_filtrados['days_since_last_activity'].mean()
+            clientes_alto_riesgo = len(clientes_filtrados[clientes_filtrados['days_since_last_activity'] > 45])
+            
+            col1.metric("Valor Total", f"${valor_total:,.0f}")
+            col2.metric("Valor Promedio", f"${valor_promedio:,.0f}")
+            col3.metric("Inactividad Promedio", f"{inactividad_promedio:.0f} dias")
+            col4.metric("Alto Riesgo", clientes_alto_riesgo)
 def main():
     st.title("Sistema Predictivo de Prevencion de Abandono de Clientes")
     
     st.sidebar.title("Navegacion")
-    app_mode = st.sidebar.selectbox(
-        "Selecciona una vista:",
-        [
-            "Cargar Datos",
-            "Exportar Datos", 
-            "Panel de Control Ejecutivo", 
-            "Dashboard Principal", 
-            "Analisis de Clientes", 
-            "Modelos Predictivos", 
-            "Simulador Campanas",
-            "Analisis Cohortes",
-            "Segmentacion"
-        ]
-    )
+    
+    # Mostrar todos los módulos como secciones separadas
+    st.sidebar.markdown("### Gestion de Datos")
+    if st.sidebar.button("Cargar Datos", use_container_width=True):
+        st.session_state.current_page = "Cargar Datos"
+    if st.sidebar.button("Agregar Cliente", use_container_width=True):
+        st.session_state.current_page = "Agregar Cliente"
+    if st.sidebar.button("Exportar Datos", use_container_width=True):
+        st.session_state.current_page = "Exportar Datos"
+    
+    st.sidebar.markdown("### Analisis y Dashboard")
+    if st.sidebar.button("Sistema de Alertas", use_container_width=True):
+        st.session_state.current_page = "Sistema de Alertas"
+    if st.sidebar.button("Panel de Control Ejecutivo", use_container_width=True):
+        st.session_state.current_page = "Panel de Control Ejecutivo"
+    if st.sidebar.button("Dashboard Principal", use_container_width=True):
+        st.session_state.current_page = "Dashboard Principal"
+    if st.sidebar.button("Analisis de Clientes", use_container_width=True):
+        st.session_state.current_page = "Analisis de Clientes"
+    
+    st.sidebar.markdown("### Modelos y Segmentacion")
+    if st.sidebar.button("Modelos Predictivos", use_container_width=True):
+        st.session_state.current_page = "Modelos Predictivos"
+    if st.sidebar.button("Simulador Campanas", use_container_width=True):
+        st.session_state.current_page = "Simulador Campanas"
+    if st.sidebar.button("Analisis Cohortes", use_container_width=True):
+        st.session_state.current_page = "Analisis Cohortes"
+    if st.sidebar.button("Segmentacion", use_container_width=True):
+        st.session_state.current_page = "Segmentacion"
+    
+    # Inicializar página actual si no existe
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = "Panel de Control Ejecutivo"
     
     customers_df, events_df, transactions_df, features_df, churn_labels = load_all_data()
     
-    if app_mode == "Cargar Datos":
+    # Navegación basada en el estado
+    current_page = st.session_state.current_page
+    
+    if current_page == "Cargar Datos":
         show_data_upload()
-    elif app_mode == "Exportar Datos":
+    elif current_page == "Agregar Cliente":
+        show_add_customer()
+    elif current_page == "Exportar Datos":
         show_data_export()
     else:
         if features_df is None:
@@ -839,20 +1365,22 @@ def main():
 
         analysis_df = features_df.merge(churn_labels[['customer_id', 'churn']], on='customer_id')
         
-        if app_mode == "Panel de Control Ejecutivo":
+        if current_page == "Panel de Control Ejecutivo":
             show_executive_dashboard(analysis_df)
-        elif app_mode == "Dashboard Principal":
+        elif current_page == "Dashboard Principal":
             show_dashboard(analysis_df)
-        elif app_mode == "Analisis de Clientes":
+        elif current_page == "Analisis de Clientes":
             show_customer_analysis(analysis_df)
-        elif app_mode == "Modelos Predictivos":
+        elif current_page == "Modelos Predictivos":
             show_ml_models(analysis_df)
-        elif app_mode == "Simulador Campanas":
+        elif current_page == "Simulador Campanas":
             show_campaign_simulator(analysis_df)
-        elif app_mode == "Analisis Cohortes":
+        elif current_page == "Analisis Cohortes":
             show_cohort_analysis(customers_df, transactions_df)
-        elif app_mode == "Segmentacion":
+        elif current_page == "Segmentacion":
             show_segmentation(analysis_df)
+        elif current_page == "Sistema de Alertas":
+            show_sistema_alertas(analysis_df)
 
 if __name__ == "__main__":
     main()
