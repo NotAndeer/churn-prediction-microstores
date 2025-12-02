@@ -1,27 +1,54 @@
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
+import os
 import random
+from datetime import datetime, timedelta
+
+import numpy as np
+import pandas as pd
+
 
 class DataGenerator:
-    def __init__(self, n_customers=1000):
+    """Genera un dataset sintético coherente para pruebas de churn.
+
+    La clase centraliza el control de aleatoriedad para garantizar
+    reproducibilidad entre ejecuciones y crea automáticamente los
+    directorios de salida para evitar errores de escritura.
+    """
+
+    def __init__(self, n_customers=1000, random_state: int | None = 42):
         self.n_customers = n_customers
+        self.random_state = random_state
         self.customers_df = None
         self.events_df = None
         self.transactions_df = None
+        self._set_random_seed()
+        self._ensure_output_dirs()
+
+    def _set_random_seed(self):
+        if self.random_state is not None:
+            random.seed(self.random_state)
+            np.random.seed(self.random_state)
+
+    def _ensure_output_dirs(self):
+        os.makedirs("data/synthetic", exist_ok=True)
         
     def generate_customer_profiles(self):
         print("Generando perfiles de clientes...")
         profiles = []
+        today = datetime.now()
+        locations = ['Bogota', 'Medellin', 'Cali', 'Barranquilla', 'Cartagena']
+        devices = ['mobile', 'desktop', 'tablet']
+        age_groups = ['18-25', '26-35', '36-45', '46+']
+
         for i in range(self.n_customers):
-            signup_date = datetime.now() - timedelta(days=random.randint(1, 365))
+            signup_date = today - timedelta(days=random.randint(1, 365))
             profiles.append({
                 'customer_id': f'CUST_{i:06d}',
                 'signup_date': signup_date,
-                'location': random.choice(['Bogota', 'Medellin', 'Cali', 'Barranquilla', 'Cartagena']),
-                'device_type': random.choice(['mobile', 'desktop', 'tablet']),
-                'age_group': random.choice(['18-25', '26-35', '36-45', '46+'])
+                'location': random.choice(locations),
+                'device_type': random.choice(devices),
+                'age_group': random.choice(age_groups)
             })
+
         self.customers_df = pd.DataFrame(profiles)
         return self.customers_df
     
@@ -29,7 +56,7 @@ class DataGenerator:
         print("Generando datos de comportamiento...")
         events = []
         event_types = ['page_view', 'add_to_cart', 'product_view', 'search', 'wishlist_add']
-        
+
         for _, customer in self.customers_df.iterrows():
             n_sessions = max(1, int(np.random.poisson(8)))
             
@@ -58,9 +85,10 @@ class DataGenerator:
     def generate_transactions(self):
         print("Generando transacciones...")
         transactions = []
-        
-        buying_customers = random.sample(list(self.customers_df['customer_id']), 
-                                       int(self.n_customers * 0.6))
+
+        buying_customers = random.sample(
+            list(self.customers_df['customer_id']), int(self.n_customers * 0.6)
+        )
         
         for customer_id in buying_customers:
             n_purchases = random.randint(1, 8)
@@ -113,8 +141,10 @@ class DataGenerator:
         self.events_df.to_csv('data/synthetic/events.csv', index=False)
         self.transactions_df.to_csv('data/synthetic/transactions.csv', index=False)
         churn_labels.to_csv('data/synthetic/churn_labels.csv', index=False)
-        
-        print(f"Datos generados: {len(self.customers_df)} clientes, {len(self.events_df)} eventos, {len(self.transactions_df)} transacciones")
+
+        print(
+            f"Datos generados: {len(self.customers_df)} clientes, {len(self.events_df)} eventos, {len(self.transactions_df)} transacciones"
+        )
         print(f"Tasa de churn: {churn_labels['churn'].mean():.1%}")
         
         return self.customers_df, self.events_df, self.transactions_df, churn_labels
