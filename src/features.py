@@ -1,12 +1,38 @@
-import pandas as pd
-import numpy as np
 from datetime import datetime
 
+import numpy as np
+import pandas as pd
+
+
 class FeatureEngineer:
-    def __init__(self, customers_df, events_df, transactions_df):
+    """Calcula características agregadas por cliente con validaciones básicas."""
+
+    def __init__(self, customers_df, events_df, transactions_df, reference_date: datetime | None = None):
         self.customers_df = customers_df
         self.events_df = events_df
         self.transactions_df = transactions_df
+        self.reference_date = reference_date or self._infer_reference_date()
+        self._validate_inputs()
+
+    def _validate_inputs(self):
+        required_customer_cols = {'customer_id', 'signup_date'}
+        required_event_cols = {'customer_id', 'session_id', 'timestamp', 'event_type'}
+        required_tx_cols = {'customer_id', 'timestamp', 'amount', 'items_count'}
+
+        if not required_customer_cols.issubset(self.customers_df.columns):
+            missing = required_customer_cols - set(self.customers_df.columns)
+            raise ValueError(f"Faltan columnas en clientes: {missing}")
+        if not required_event_cols.issubset(self.events_df.columns):
+            missing = required_event_cols - set(self.events_df.columns)
+            raise ValueError(f"Faltan columnas en eventos: {missing}")
+        if not required_tx_cols.issubset(self.transactions_df.columns):
+            missing = required_tx_cols - set(self.transactions_df.columns)
+            raise ValueError(f"Faltan columnas en transacciones: {missing}")
+
+    def _infer_reference_date(self):
+        if not self.events_df.empty:
+            return pd.to_datetime(self.events_df['timestamp']).max()
+        return datetime.now()
         
     def calculate_customer_features(self):
         print("Calculando caracteristicas por cliente...")
@@ -46,7 +72,10 @@ class FeatureEngineer:
             
             features_list.append(customer_feats)
         
-        return pd.DataFrame(features_list)
+        features_df = pd.DataFrame(features_list)
+        numeric_cols = features_df.select_dtypes(include=[np.number]).columns
+        features_df[numeric_cols] = features_df[numeric_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
+        return features_df
     
     def _avg_session_duration(self, customer_events):
         if customer_events.empty:
@@ -70,21 +99,15 @@ class FeatureEngineer:
     
     def _days_since_signup(self, customer_id):
         customer = self.customers_df[self.customers_df['customer_id'] == customer_id].iloc[0]
-        # Convertir a datetime si es string
-        signup_date = customer['signup_date']
-        if isinstance(signup_date, str):
-            signup_date = pd.to_datetime(signup_date)
-        return (datetime.now() - signup_date).days
+        signup_date = pd.to_datetime(customer['signup_date'])
+        return (self.reference_date - signup_date).days
     
     def _days_since_last_activity(self, customer_events):
         if customer_events.empty:
             return 999
-        
-        last_activity = customer_events['timestamp'].max()
-        # Convertir a datetime si es string
-        if isinstance(last_activity, str):
-            last_activity = pd.to_datetime(last_activity)
-        return (datetime.now() - last_activity).days
+
+        last_activity = pd.to_datetime(customer_events['timestamp']).max()
+        return (self.reference_date - last_activity).days
     
     def _purchase_frequency(self, customer_transactions):
         if len(customer_transactions) < 2:
@@ -124,7 +147,8 @@ def create_features(customers_path, events_path, transactions_path, output_path)
     transactions = pd.read_csv(transactions_path, parse_dates=['timestamp'])
     
     print("Calculando caracteristicas...")
-    engineer = FeatureEngineer(customers, events, transactions)
+    reference_date = max(events['timestamp'].max(), transactions['timestamp'].max())
+    engineer = FeatureEngineer(customers, events, transactions, reference_date=reference_date)
     features_df = engineer.calculate_customer_features()
     
     print("Guardando caracteristicas...")
@@ -136,7 +160,7 @@ def create_features(customers_path, events_path, transactions_path, output_path)
 if __name__ == "__main__":
     create_features(
         'data/synthetic/customers.csv',
-        'data/synthetic/events.csv', 
+        'data/synthetic/events.csv',
         'data/synthetic/transactions.csv',
         'data/processed/features.csv'
     )
