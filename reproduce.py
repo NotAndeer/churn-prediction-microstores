@@ -1,56 +1,34 @@
-import subprocess
-import sys
-import os
+"""Pipeline runner for churn microstores."""
+from __future__ import annotations
 
-def run_script(description, script_path):
-    print(f"Ejecutando: {description}")
-    try:
-        if not os.path.exists(script_path):
-            print(f"Error: Archivo no encontrado - {script_path}")
-            return False
-            
-        result = subprocess.run([sys.executable, script_path], capture_output=True, text=True)
-        if result.returncode == 0:
-            print(f"Completado: {description}")
-            if result.stdout:
-                print(result.stdout)
-            return True
-        else:
-            print(f"Error en: {description}")
-            print(result.stderr)
-            return False
-    except Exception as e:
-        print(f"Excepcion en {description}: {e}")
-        return False
+import logging
 
-def main():
-    print("Iniciando pipeline completo del sistema predictivo")
-    print("=" * 60)
-    
-    scripts = [
-        ("Generacion de datos sinteticos", "src/data_generation.py"),
-        ("Calculo de caracteristicas", "src/features.py"),
-        ("Entrenamiento de modelos", "src/models.py")
-    ]
-    
-    success_count = 0
-    for description, script_path in scripts:
-        if run_script(description, script_path):
-            success_count += 1
-        print("-" * 40)
-    
-    print("=" * 60)
-    if success_count == len(scripts):
-        print("Pipeline completado exitosamente")
-        print("\nResumen:")
-        print("- Datos sinteticos generados")
-        print("- Caracteristicas calculadas")
-        print("- Modelos entrenados")
-        print("\nPara iniciar el dashboard ejecuta:")
-        print("streamlit run app/streamlit_app.py")
-    else:
-        print(f"Completados {success_count} de {len(scripts)} pasos")
-        print("Revise los errores anteriores")
+from churn_microstores.config import paths
+from churn_microstores.data_generation import DataGenerator
+from churn_microstores.features import create_features
+from churn_microstores.logging_utils import configure_logging
+from churn_microstores.models import run_model_pipeline
+
+
+def main() -> None:
+    configure_logging()
+    logger = logging.getLogger(__name__)
+    logger.info("Iniciando pipeline completo del sistema predictivo")
+
+    generator = DataGenerator()
+    generator.generate_all_data()
+
+    create_features(
+        paths.data_raw / "customers.csv",
+        paths.data_raw / "events.csv",
+        paths.data_raw / "transactions.csv",
+        paths.data_processed / "features.csv",
+    )
+
+    run_model_pipeline()
+    logger.info("Pipeline completado exitosamente")
+    logger.info("Para iniciar el dashboard ejecuta: streamlit run app/streamlit_app.py")
+
 
 if __name__ == "__main__":
     main()
