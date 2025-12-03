@@ -1,0 +1,4 @@
+Modelo,AUC,Accuracy
+random_forest,1.0,1.0
+xgboost,1.0,1.0
+logistic_regression,0.9984243697478992,0.9866666666666667

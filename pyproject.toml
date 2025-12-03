@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "churn-microstores"
+version = "0.1.0"
+description = "Churn prediction toolkit for microstores"
+requires-python = ">=3.9"
+dependencies = [
+  "pandas",
+  "numpy",
+  "scikit-learn",
+  "xgboost",
+  "streamlit",
+  "seaborn",
+  "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = [
+  "black",
+  "isort",
+  "ruff",
+  "pytest",
+]
+
+[tool.black]
+line-length = 120
+
+[tool.isort]
+profile = "black"
+
+[tool.ruff]
+line-length = 120
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

@@ -1,0 +1,13 @@
+pandas
+numpy
+scikit-learn
+xgboost
+streamlit
+seaborn
+matplotlib
+
+[dev]
+black
+isort
+ruff
+pytest
